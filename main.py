@@ -23,19 +23,23 @@ def load_into_ps(file: Path):
     faces = np.asarray(mesh.faces)
     ps.remove_all_structures
 
-    ps_mesh = ps.register_surface_mesh(
-        "mesh",
-        vertices,
-        faces,
-        transparency=.4,
-    )
+    #ps_mesh = ps.register_surface_mesh(
+    #    "mesh",
+    #    vertices,
+    #    faces,
+    #    transparency=.4,
+    #)
     
     bounding_box_diagonal = np.linalg.norm(vertices.max(axis=0) - vertices.min(axis=0))
+
+    point_radius = .003 * bounding_box_diagonal if state["selected_index"] != 0 else 0.01
+    normal_radius = 0.03 * bounding_box_diagonal if state["selected_index"] != 0 else 0.005
+    normal_length = 0.03 * bounding_box_diagonal if state["selected_index"] != 0 else 0.05
     
     pointcloud = ps.register_point_cloud(
         "vertices",
         vertices,
-        radius=.003 * bounding_box_diagonal,
+        radius= point_radius,
         enabled=state["show_points"],
     )
 
@@ -51,8 +55,8 @@ def load_into_ps(file: Path):
             "vertex normals",
             normals,
             enabled=state["show_normals"],
-            length=0.03 * bounding_box_diagonal,
-            radius=0.0008 * bounding_box_diagonal,
+            length= normal_length,
+            radius= normal_radius,
         )
 
 
@@ -82,6 +86,11 @@ def callback():
     if psim.Button("Load selected OFF"):
         path = state["files"][state["selected_index"]]
         load_into_ps(path)
+        if state["selected_index"] == 0:
+            ps.set_up_dir('z_up')
+            #ps.set_front_dir('x_front')
+        else:
+            ps.set_up_dir('y_up')
 
     if state["current_file"] is not None:
         psim.TextUnformatted(f"Loaded: {state['current_file']}")
