@@ -1,0 +1,8 @@
+/build/
+venv/
+.venv/
+.vscode/
+__pycache__/
+*.pyc
+.polyscope.ini
+skeleton/__pychache__/
