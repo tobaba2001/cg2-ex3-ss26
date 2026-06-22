@@ -43,4 +43,7 @@ def evaluate_grid(grid_points, constraints, wendland_radius) -> np.ndarray:
     raise NotImplementedError
 
 def wendland_weights(distances, radius) -> np.ndarray:
-    raise NotImplementedError
+    if distances > radius:
+        return 0.0
+    ww = ((1-(distances / radius))*4)(4.0 * (distances / radius) + 1.0)
+    return ww
