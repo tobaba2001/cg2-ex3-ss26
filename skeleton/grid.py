@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 import numpy as np
+from scipy.spatial import cKDTree
 
 
 @dataclass 
@@ -36,14 +37,71 @@ def create_grid(bbox_min, bbox_max, cell_matrix) -> np.ndarray:
         cell_matrix=cell_matrix,
         bbox_min=bbox_min,
         bbox_max=bbox_max,
-
     )
 
-def evaluate_grid(grid_points, constraints, wendland_radius) -> np.ndarray:
-    raise NotImplementedError
+def polynomial_basis_matrix(relative_positions: np.ndarray, basis: str) -> np.ndarray:
+    n = len(relative_positions)
+    if basis == "constant":
+        return np.ones((n, 1), dtype=float)
+
+    x = relative_positions[:, 0]
+    y = relative_positions[:, 1]
+    z = relative_positions[:, 2]
+
+    if basis == "linear":
+        return np.column_stack([np.ones(n, dtype=float), x, y, z])
+
+    raise ValueError(f"Unsupported basis: {basis}")
+
+
+def evaluate_grid(grid_points, constraints, wendland_radius, basis="constant") -> np.ndarray:
+    if wendland_radius <= 0.0 or len(grid_points) == 0:
+        return np.zeros(len(grid_points), dtype=float)
+
+    vertices = constraints.vertices
+    function_values = constraints.function_values
+    if len(vertices) == 0:
+        return np.zeros(len(grid_points), dtype=float)
+
+    tree = cKDTree(vertices)
+    neighbors = tree.query_ball_point(grid_points, wendland_radius)
+
+    grid_values = np.zeros(len(grid_points), dtype=float)
+    for i, idxs in enumerate(neighbors):
+        if len(idxs) == 0:
+            grid_values[i] = 0.0
+            continue
+
+        local_positions = vertices[idxs]
+        local_values = function_values[idxs]
+        relative_positions = local_positions - grid_points[i]
+        distances = np.linalg.norm(relative_positions, axis=1)
+        weights = wendland_weights(distances, wendland_radius)
+        total_weight = np.sum(weights)
+
+        if total_weight == 0.0:
+            grid_values[i] = 0.0
+            continue
+
+        B = polynomial_basis_matrix(relative_positions, basis)
+        sqrt_w = np.sqrt(weights)[:, None]
+        A = B * sqrt_w
+        b = local_values * np.sqrt(weights)
+
+        coeffs, *_ = np.linalg.lstsq(A, b, rcond=None)
+        grid_values[i] = coeffs[0]
+
+    return grid_values
+
 
 def wendland_weights(distances, radius) -> np.ndarray:
-    if distances > radius:
-        return 0.0
-    ww = ((1-(distances / radius))*4)(4.0 * (distances / radius) + 1.0)
-    return ww
+    weights = np.zeros_like(distances)
+
+    mask = distances <= radius
+    if np.any(mask):
+        t = distances[mask] / radius
+        weights[mask] = ((1.0 - t) ** 4) * (4.0 * t + 1.0)
+
+    if weights.shape == ():
+        return float(weights)
+    return weights

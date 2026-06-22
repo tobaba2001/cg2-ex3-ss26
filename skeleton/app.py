@@ -6,7 +6,7 @@ import polyscope as ps
 import polyscope.imgui as psim
 
 from constraints import ConstraintPoints, compute_constraints
-from grid import ImplicitGrid, create_grid
+from grid import ImplicitGrid, create_grid, evaluate_grid
 from point_cloud import PointCloud, load_point_cloud
 
 
@@ -31,6 +31,9 @@ class PSState:
     grid_width: int = 16
     grid_height: int = 16
     grid_depth: int = 16
+    radius: float = 0.1
+    grid_basis_idx: int = 0
+    hide_outsides: bool = False
 
 class PSApp:
     state: PSState
@@ -92,8 +95,7 @@ class PSApp:
 
         if psim.Button("Flip normals") and self.state.point_cloud is not None:
             self.flip_normals()
-
-       
+     
     def _draw_constraint_controls(self):
         psim.TextUnformatted("Constraints")
         psim.Separator()
@@ -157,12 +159,35 @@ class PSApp:
             2,
             60,
         )
+        
+        changed_radius, self.state.radius = psim.SliderFloat(
+            "Wendland Radius",
+            self.state.radius,
+            0.01,
+            250.0,
+        )
+        
+        basis_labels = ["Constant", "Linear"]
+        changed_basis, self.state.grid_basis_idx = psim.Combo(
+            "Polynomial Basis",
+            self.state.grid_basis_idx,
+            basis_labels,
+        )
+
+        changed_hide_outsides, self.state.hide_outsides = psim.Checkbox(
+            "Hide outside",
+            self.state.hide_outsides,
+        )
 
         if changed_grid and self.grid_handle is not None:
             self.grid_handle.set_enabled(self.state.show_grid)
 
-        if (changed_width or changed_height or changed_depth) and self.state.point_cloud is not None:
+        if (changed_width or changed_height or changed_depth or changed_radius or changed_basis) and self.state.point_cloud is not None:
             self.recompute_grid()
+            
+        if changed_hide_outsides and self.state.grid is not None:
+            self._register_grid()
+            
         
     def load_selected_file(self):
         path = self.state.files[self.state.selected_idx]
@@ -212,6 +237,14 @@ class PSApp:
                 self.state.grid_depth,
             ),
         )
+
+        if self.state.constraints is not None:
+            self.state.grid.values = evaluate_grid(
+                self.state.grid.points,
+                self.state.constraints,
+                self.state.radius,
+                basis=["constant", "linear", "quadratic"][self.state.grid_basis_idx],
+            )
 
         self._register_grid()
 
@@ -372,3 +405,40 @@ class PSApp:
             radius=radius,
             enabled=self.state.show_grid,
         )
+
+        if self.state.grid.values is not None:
+            colors = np.zeros((len(self.state.grid.points), 3), dtype=float)
+            colors[self.state.grid.values > 0] = np.array([1.0, 0.25, 0.1])
+            colors[self.state.grid.values < 0] = np.array([0.1, 0.35, 1.0])
+            colors[self.state.grid.values == 0] = np.array([0.7, 0.7, 0.7])
+            self.grid_handle.add_color_quantity(
+                "implicit sign",
+                colors,
+                enabled=True,
+            )
+            
+        if self.state.hide_outsides and self.state.grid.values is not None:
+
+            mask = self.state.grid.values < 0.0
+
+            filtered_points = self.state.grid.points[mask]
+            filtered_values = self.state.grid.values[mask]
+
+            filtered_colors = np.zeros((len(filtered_points), 3))
+            filtered_colors[filtered_values < 0] = [0.1, 0.35, 1.0]
+
+            ps.remove_point_cloud("grid", error_if_absent=False)
+
+            self.grid_handle = ps.register_point_cloud(
+                "grid",
+                filtered_points,
+                radius=radius,
+                enabled=self.state.show_grid,
+            )
+
+            self.grid_handle.add_color_quantity(
+                "implicit sign",
+                filtered_colors,
+                enabled=True,
+            )
+    
