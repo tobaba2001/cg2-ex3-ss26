@@ -35,3 +35,22 @@ def load_point_cloud(path: Path) -> PointCloud:
         vertices.append(values[:3])
         normals.append(values[3:6])
 
+    vertices = np.array(vertices, dtype = float)
+    normals = np.array(normals, dtype = float)
+
+    lengths = np.linalg.norm(normals, axis=1, keepdims=True)
+    normals = normals / np.maximum(lengths, 1e-12)
+
+    bbox_min = vertices.min(axis=0)
+    bbox_max = vertices.max(axis=0)
+    bbox_diagonal = np.linalg.norm(bbox_max - bbox_min)
+
+    return PointCloud(
+        vertices = vertices,
+        normals = normals,
+        kdtree = cKDTree(vertices),
+        bbox_min = bbox_min,
+        bbox_max = bbox_max,
+        bbox_diagonal = bbox_diagonal,
+        name = path.name
+    )
