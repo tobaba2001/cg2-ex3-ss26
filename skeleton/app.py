@@ -93,6 +93,8 @@ class PSApp:
         if psim.Button("Flip normals") and self.state.point_cloud is not None:
             self.flip_normals()
 
+       
+    def _draw_constraint_controls(self):
         psim.TextUnformatted("Constraints")
         psim.Separator()
 
@@ -104,7 +106,6 @@ class PSApp:
         if changed_constraints and self.constraint_handle is not None:
             self.constraint_handle.set_enabled(self.state.show_constraints)
 
-    def _draw_constraint_controls(self):
         changed_bbox_scale, self.state.bbox_scale = psim.SliderFloat(
             "Extension Factor",
             self.state.bbox_scale,
@@ -116,7 +117,7 @@ class PSApp:
             self._register_bounding_box(self.state.point_cloud)
             if self.state.constraints is not None:
                 self.recompute_constraints()
-                
+
             if self.state.grid is not None:
                 self.recompute_grid()
 
