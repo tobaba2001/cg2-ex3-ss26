@@ -74,7 +74,6 @@ class PSApp:
         )
 
         if changed_points and self.pointcloud_handle is not None:
-            print(self.state.show_points)
             self.pointcloud_handle.set_enabled(self.state.show_points)
 
         changed_normals, self.state.show_normals = psim.Checkbox(
@@ -271,18 +270,19 @@ class PSApp:
             ps.remove_point_cloud("constraints", error_if_absent=False)
 
         constraints = self.state.constraints
-        colors = np.zeros((len(constraints.points), 3))
-        colors[constraints.values > 0] = np.array([0.1, 0.35, 1.0])
-        colors[constraints.values < 0] = np.array([1.0, 0.25, 0.1])
-        colors[constraints.values == 0] = np.array([0.05, 0.05, 0.05])
+        colors = np.zeros((len(constraints.vertices), 3))
+        colors[constraints.function_values > 0] = np.array([0.1, 0.35, 1.0])
+        colors[constraints.function_values < 0] = np.array([1.0, 0.25, 0.1])
+        colors[constraints.function_values == 0] = np.array([0.05, 0.05, 0.05])
 
-        radius = 0.004
-        if self.state.point_cloud is not None:
-            radius *= self.state.point_cloud.bbox_diagonal
+        radius = 0.003 * self.state.point_cloud.bbox_diagonal
+
+        if self.state.point_cloud.name == "cat.off":
+            radius = 0.01
 
         self.constraint_handle = ps.register_point_cloud(
             "constraints",
-            constraints.points,
+            constraints.vertices,
             radius=radius,
             enabled=self.state.show_constraints,
         )

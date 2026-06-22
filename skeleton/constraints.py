@@ -7,9 +7,9 @@ from point_cloud import PointCloud
 
 @dataclass
 class ConstraintPoints:
-    points: np.ndarray
-    values: np.ndarray
-    sources_indices: np.ndarray | None = None
+    vertices: np.ndarray
+    function_values: np.ndarray
+    source_indices: np.ndarray | None = None
 
 
 def compute_constraints(
@@ -17,67 +17,80 @@ def compute_constraints(
     alpha_scale: float,
     bbox_scale: float,
 ) -> ConstraintPoints:
-    vertices = point_cloud.vertices
-    normals = point_cloud.normals
-    n_vertices = len(vertices)
+    n = len(point_cloud.vertices)
+    alpha0 = alpha_scale * point_cloud.bbox_diagonal * bbox_scale
 
-    alpha = alpha_scale * bbox_scale * point_cloud.bbox_diagonal
+    positive_vertices = np.empty_like(point_cloud.vertices)
+    negative_vertices = np.empty_like(point_cloud.vertices)
 
-    points = np.empty((3 * n_vertices, 3), dtype=float)
-    values = np.empty(3 * n_vertices, dtype=float)
-    source_indices = np.concatenate(
-        [np.arange(n_vertices), np.arange(n_vertices), np.arange(n_vertices)]
-    )
+    positive_alphas = np.empty(n)
+    negative_alphas = np.empty(n)
 
-    points[:n_vertices] = vertices
-    values[:n_vertices] = 0.0
+    # compute constraint values trying to converge
 
-    for i, (point, normal) in enumerate(zip(vertices, normals)):
-        positive_point, positive_alpha = _find_valid_offset(
-            point_cloud,
-            source_index=i,
-            point=point,
-            direction=normal,
-            alpha=alpha,
-        )
-        negative_point, negative_alpha = _find_valid_offset(
-            point_cloud,
-            source_index=i,
-            point=point,
-            direction=-normal,
-            alpha=alpha,
-        )
+    for i in range(n):
+        p_i = point_cloud.vertices[i]
+        n_i = point_cloud.normals[i]
 
-        positive_index = n_vertices + i
-        negative_index = 2 * n_vertices + i
+        alpha = alpha0
+        while True:
+            q = p_i + alpha * n_i
+            _, nearest_index = point_cloud.kdtree.query(q)
 
-        points[positive_index] = positive_point
-        values[positive_index] = positive_alpha
+            if nearest_index == i:
+                break
+            
+            alpha *= .5
 
-        points[negative_index] = negative_point
-        values[negative_index] = -negative_alpha
+            # Assume 0 if not converging
+            if alpha < 1e-12:
+                q = p_i
+                alpha = 0.0
+                break
+
+        positive_vertices[i] = q
+        positive_alphas[i] = alpha
+
+        alpha = alpha0
+        while True:
+            q = p_i - alpha * n_i
+            _, nearest_index = point_cloud.kdtree.query(q)
+
+            if nearest_index == i:
+                break 
+
+            alpha *= .5
+
+            # Assume 0 if not converging
+            if alpha < 1e-12:
+                q = p_i
+                alpha = 0.0
+                break
+
+        negative_vertices[i] = q
+        negative_alphas[i] = alpha
+
+    vertices = np.vstack([
+        point_cloud.vertices,
+        positive_vertices,
+        negative_vertices,
+    ])
+
+    function_values = np.concatenate([
+        np.zeros(n),
+        positive_alphas,
+        -negative_alphas,
+    ])
+
+    source_indices = np.concatenate([
+        np.arange(n),
+        np.arange(n),
+        np.arange(n),
+    ])
+
 
     return ConstraintPoints(
-        points=points,
-        values=values,
-        sources_indices=source_indices,
+        vertices = vertices,
+        function_values = function_values,
+        source_indices = source_indices,
     )
-
-
-def _find_valid_offset(
-    point_cloud: PointCloud,
-    source_index: int,
-    point: np.ndarray,
-    direction: np.ndarray,
-    alpha: float,
-) -> tuple[np.ndarray, float]:
-    while alpha > 1e-12:
-        offset_point = point + alpha * direction
-        _, closest_index = point_cloud.kdtree.query(offset_point)
-
-        if closest_index == source_index:
-            return offset_point, alpha
-
-        alpha *= 0.5
-
-    return point, 0.0
