@@ -6,7 +6,7 @@ import polyscope as ps
 import polyscope.imgui as psim
 
 from constraints import ConstraintPoints, compute_constraints
-from grid import ImplicitGrid
+from grid import ImplicitGrid, create_grid
 from point_cloud import PointCloud, load_point_cloud
 
 
@@ -25,8 +25,12 @@ class PSState:
     grid_resolution: int = 32
     show_points: bool = True
     show_normals: bool = True
-    show_constraints: bool = False
     normals_flipped: bool = False
+    show_constraints: bool = False
+    show_grid: bool = False
+    grid_width: int = 16
+    grid_height: int = 16
+    grid_depth: int = 16
 
 class PSApp:
     state: PSState
@@ -37,6 +41,7 @@ class PSApp:
         self.normal_handle = None
         self.bbox_handle = None
         self.constraint_handle = None
+        self.grid_handle = None
 
     def run(self):
         ps.init()
@@ -46,7 +51,8 @@ class PSApp:
     def callback(self):
         self._draw_file_loader()
         self._draw_display_controls()
-        self._draw_reconstruction_controls()
+        self._draw_constraint_controls()
+        self._draw_grid_controls()
 
     def _draw_file_loader(self):
         psim.TextUnformatted("OFF file loader")
@@ -98,7 +104,7 @@ class PSApp:
         if changed_constraints and self.constraint_handle is not None:
             self.constraint_handle.set_enabled(self.state.show_constraints)
 
-    def _draw_reconstruction_controls(self):
+    def _draw_constraint_controls(self):
         changed_bbox_scale, self.state.bbox_scale = psim.SliderFloat(
             "Extension Factor",
             self.state.bbox_scale,
@@ -110,6 +116,9 @@ class PSApp:
             self._register_bounding_box(self.state.point_cloud)
             if self.state.constraints is not None:
                 self.recompute_constraints()
+                
+            if self.state.grid is not None:
+                self.recompute_grid()
 
         changed_alpha, self.state.alpha_scale = psim.SliderFloat(
             "Alpha Factor",
@@ -121,6 +130,39 @@ class PSApp:
         if changed_alpha and self.state.point_cloud is not None:
             self.recompute_constraints()
 
+    def _draw_grid_controls(self):
+        changed_grid, self.state.show_grid = psim.Checkbox(
+            "Show grid",
+            self.state.show_grid,
+        )
+
+        changed_width, self.state.grid_width = psim.SliderInt(
+            "# width cells",
+            self.state.grid_width,
+            2,
+            60,
+        )
+
+        changed_height, self.state.grid_height = psim.SliderInt(
+            "# height cells",
+            self.state.grid_height,
+            2,
+            60,
+        )
+
+        changed_depth, self.state.grid_depth = psim.SliderInt(
+            "# depth cells",
+            self.state.grid_depth,
+            2,
+            60,
+        )
+
+        if changed_grid and self.grid_handle is not None:
+            self.grid_handle.set_enabled(self.state.show_grid)
+
+        if (changed_width or changed_height or changed_depth) and self.state.point_cloud is not None:
+            self.recompute_grid()
+        
     def load_selected_file(self):
         path = self.state.files[self.state.selected_idx]
         point_cloud = load_point_cloud(path)
@@ -134,6 +176,7 @@ class PSApp:
         self._register_point_cloud(point_cloud)
         self._register_bounding_box(point_cloud)
         self.recompute_constraints()
+        self.recompute_grid()
 
         if point_cloud.name == "cat.off":
             ps.set_up_dir("z_up")
@@ -152,6 +195,24 @@ class PSApp:
             self.state.bbox_scale,
         )
         self._register_constraints()
+
+    def recompute_grid(self):
+        if self.state.point_cloud is None:
+            return
+
+        bbox_min, bbox_max = self._scaled_bbox(self.state.point_cloud)
+
+        self.state.grid = create_grid(
+            bbox_min,
+            bbox_max,
+            (
+                self.state.grid_width,
+                self.state.grid_height,
+                self.state.grid_depth,
+            ),
+        )
+
+        self._register_grid()
 
     def flip_normals(self):
         if self.state.point_cloud is None:
@@ -290,4 +351,23 @@ class PSApp:
             "constraint sign",
             colors,
             enabled=True,
+        )
+
+    def _register_grid(self):
+        if self.state.grid is None:
+            return
+
+        if self.grid_handle is not None:
+            ps.remove_point_cloud("grid", error_if_absent=False)
+
+        radius = 0.0015 * self.state.point_cloud.bbox_diagonal
+        
+        if self.state.point_cloud.name == "cat.off":
+            radius = 0.0015
+
+        self.grid_handle = ps.register_point_cloud(
+            "grid",
+            self.state.grid.points,
+            radius=radius,
+            enabled=self.state.show_grid,
         )
