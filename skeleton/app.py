@@ -550,4 +550,59 @@ class PSApp:
             faces,
             enabled=self.state.show_mesh,
         )
-    
+
+        normals = self._compute_mesh_normals(verts)
+        self.mesh_handle.add_vector_quantity(
+            "finite difference normals",
+            normals,
+            defined_on="vertices",
+            enabled=True,
+        )
+
+    def _compute_mesh_normals(self, verts: np.ndarray) -> np.ndarray:
+        if (
+            self.state.constraints is None
+            or self.state.grid is None
+            or len(verts) == 0
+        ):
+            return np.zeros_like(verts)
+
+        bbox_diagonal = np.linalg.norm(
+            self.state.grid.bbox_max - self.state.grid.bbox_min
+        )
+        nx, ny, nz = self.state.grid.cell_matrix
+        cell_size = (self.state.grid.bbox_max - self.state.grid.bbox_min) / np.array(
+            [nx, ny, nz],
+            dtype=float,
+        )
+        h = max(1e-6 * bbox_diagonal, 0.05 * float(np.min(cell_size)))
+
+        offsets = np.array(
+            [
+                [h, 0.0, 0.0],
+                [-h, 0.0, 0.0],
+                [0.0, h, 0.0],
+                [0.0, -h, 0.0],
+                [0.0, 0.0, h],
+                [0.0, 0.0, -h],
+            ],
+            dtype=float,
+        )
+        sample_points = (verts[:, None, :] + offsets[None, :, :]).reshape(-1, 3)
+        sample_values = evaluate_grid(
+            sample_points,
+            self.state.constraints,
+            self.state.radius,
+            basis=["constant", "linear"][self.state.grid_basis_idx],
+        ).reshape(-1, 6)
+
+        gradients = np.column_stack(
+            [
+                (sample_values[:, 0] - sample_values[:, 1]) / (2.0 * h),
+                (sample_values[:, 2] - sample_values[:, 3]) / (2.0 * h),
+                (sample_values[:, 4] - sample_values[:, 5]) / (2.0 * h),
+            ]
+        )
+
+        lengths = np.linalg.norm(gradients, axis=1, keepdims=True)
+        return gradients / np.maximum(lengths, 1e-12)
