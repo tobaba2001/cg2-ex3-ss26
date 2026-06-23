@@ -10,7 +10,7 @@ from constraints import ConstraintPoints, compute_constraints
 from grid import ImplicitGrid, create_grid, evaluate_grid, evaluate_grid_gpu
 from point_cloud import PointCloud, load_point_cloud
 from marchingCubes import polygonise, GridCell
-from gpu_marching import generate_mesh_from_grid
+from gpu_outsourcing import generate_mesh_from_grid
 
 
 
@@ -308,8 +308,7 @@ class PSApp:
         if self.state.constraints is not None:
             self.state.grid.values = evaluate_grid_gpu(
                 self.state.grid.points,
-                self.state.constraints.vertices,
-                self.state.constraints.function_values,
+                self.state.constraints,
                 self.state.radius,
                 basis=["constant", "linear"][self.state.grid_basis_idx],
             )
