@@ -1,17 +1,30 @@
 from dataclasses import dataclass
 from pathlib import Path
+from time import perf_counter
 
 import numpy as np
 import polyscope as ps
 import polyscope.imgui as psim
 
 from constraints import ConstraintPoints, compute_constraints
-from grid import ImplicitGrid, create_grid, evaluate_grid
+from grid import ImplicitGrid, create_grid, evaluate_grid, evaluate_grid_gpu
 from point_cloud import PointCloud, load_point_cloud
 from marchingCubes import polygonise, GridCell
+from gpu_marching import generate_mesh_from_grid
+
 
 
 MESHES = Path(__file__).resolve().parent.parent / "pointcloud"
+
+
+def timed(func):
+    def wrapper(*args, **kwargs):
+        start = perf_counter()
+        res = func(*args, **kwargs)
+        end = perf_counter()
+        print(f'Execution time: {end - start}')
+        return res
+    return wrapper
 
 
 @dataclass
@@ -190,7 +203,10 @@ class PSApp:
             self.grid_handle.set_enabled(self.state.show_grid)
 
         if (changed_width or changed_height or changed_depth or changed_radius or changed_basis) and self.state.point_cloud is not None:
-            self.recompute_grid()
+            grid_recompute = True
+            if changed_radius:
+                grid_recompute = False
+            self.recompute_grid(grid_recompute)
             
         if changed_hide_outsides and self.state.grid is not None:
             self._register_grid()
@@ -258,11 +274,26 @@ class PSApp:
         )
         self._register_constraints()
 
-    def recompute_grid(self):
+    def recompute_grid(self, grid_recompute=True):
         if self.state.point_cloud is None:
             return
 
         bbox_min, bbox_max = self._scaled_bbox(self.state.point_cloud)
+
+        if grid_recompute:
+            if self.state.grid is None:
+                self.state.grid = create_grid(
+                    bbox_min,
+                    bbox_max,
+                    (
+                        self.state.grid_width,
+                        self.state.grid_height,
+                        self.state.grid_depth,
+                    ),
+                )
+            else:
+                self.state.grid.bbox_min = bbox_min
+                self.state.grid.bbox_max = bbox_max
 
         self.state.grid = create_grid(
             bbox_min,
@@ -275,9 +306,10 @@ class PSApp:
         )
 
         if self.state.constraints is not None:
-            self.state.grid.values = evaluate_grid(
+            self.state.grid.values = evaluate_grid_gpu(
                 self.state.grid.points,
-                self.state.constraints,
+                self.state.constraints.vertices,
+                self.state.constraints.function_values,
                 self.state.radius,
                 basis=["constant", "linear"][self.state.grid_basis_idx],
             )
@@ -285,7 +317,7 @@ class PSApp:
         self._register_grid()
         # update mesh if visible
         if self.state.show_mesh:
-            self._register_mesh()
+            self._register_mesh_gpu()
 
     def flip_normals(self):
         if self.state.point_cloud is None:
@@ -481,6 +513,29 @@ class PSApp:
                 enabled=True,
             )
 
+    #@timed
+    def _register_mesh_gpu(self):
+        """Generate a triangle mesh from the implicit grid using GPU Marching Cubes and register it in Polyscope."""
+        if self.state.grid is None or self.state.grid.values is None:
+            return
+
+        # remove existing mesh if present
+        if self.mesh_handle is not None:
+            ps.remove_surface_mesh("implicit_mesh", error_if_absent=False)
+            self.mesh_handle = None
+
+        verts, faces = generate_mesh_from_grid(self.state.grid, self.state.iso_level)
+        if verts is None or len(verts) == 0:
+            return
+
+        self.mesh_handle = ps.register_surface_mesh(
+            "implicit_mesh",
+            verts,
+            faces,
+            enabled=self.state.show_mesh,
+        )
+
+    #@timed
     def _register_mesh(self):
         """Generate a triangle mesh from the implicit grid using Marching Cubes and register it in Polyscope."""
         if self.state.grid is None or self.state.grid.values is None:
@@ -494,14 +549,11 @@ class PSApp:
         nx, ny, nz = self.state.grid.cell_matrix
         points = self.state.grid.points
         values = self.state.grid.values
-
         # helper to convert (i,j,k) to flat index in points (meshgrid indexing='ij')
         def idx(i, j, k):
             return i * (ny + 1) * (nz + 1) + j * (nz + 1) + k
-
         verts = []
         faces = []
-
         # iterate over all cells
         for i in range(nx):
             for j in range(ny):
@@ -518,17 +570,14 @@ class PSApp:
                         (i + 1, j + 1, k + 1),
                         (i, j + 1, k + 1),
                     ]
-
                     for vi, (ii, jj, kk) in enumerate(cell_idx):
                         fi = idx(ii, jj, kk)
                         cell.p[vi] = points[fi]
                         cell.val[vi] = float(values[fi])
-
                     try:
                         tris = polygonise(cell, self.state.iso_level)
                     except Exception:
                         tris = []
-
                     for tri in tris:
                         if tri is None or tri.p[0] is None:
                             continue
@@ -537,13 +586,10 @@ class PSApp:
                         verts.append(np.array(tri.p[1], dtype=float))
                         verts.append(np.array(tri.p[2], dtype=float))
                         faces.append([base, base + 1, base + 2])
-
         if len(verts) == 0:
             return
-
         verts = np.vstack(verts)
         faces = np.array(faces, dtype=int)
-
         self.mesh_handle = ps.register_surface_mesh(
             "implicit_mesh",
             verts,
