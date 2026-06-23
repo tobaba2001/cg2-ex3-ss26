@@ -2,3 +2,5 @@ numpy
 polyscope
 scipy
 trimesh
+PyOpenGL
+PyOpenGL_accelerate
