@@ -8,6 +8,7 @@ import polyscope.imgui as psim
 from constraints import ConstraintPoints, compute_constraints
 from grid import ImplicitGrid, create_grid, evaluate_grid
 from point_cloud import PointCloud, load_point_cloud
+from marchingCubes import polygonise, GridCell
 
 
 MESHES = Path(__file__).resolve().parent.parent / "pointcloud"
@@ -34,6 +35,8 @@ class PSState:
     radius: float = 0.1
     grid_basis_idx: int = 0
     hide_outsides: bool = False
+    show_mesh: bool = False
+    iso_level: float = 0.0
 
 class PSApp:
     state: PSState
@@ -45,6 +48,7 @@ class PSApp:
         self.bbox_handle = None
         self.constraint_handle = None
         self.grid_handle = None
+        self.mesh_handle = None
 
     def run(self):
         ps.init()
@@ -56,6 +60,7 @@ class PSApp:
         self._draw_display_controls()
         self._draw_constraint_controls()
         self._draw_grid_controls()
+        self._draw_surface_mesh_controls()
 
     def _draw_file_loader(self):
         psim.TextUnformatted("OFF file loader")
@@ -134,6 +139,8 @@ class PSApp:
             self.recompute_constraints()
 
     def _draw_grid_controls(self):
+        psim.TextUnformatted("Grid")
+        psim.Separator()
         changed_grid, self.state.show_grid = psim.Checkbox(
             "Show grid",
             self.state.show_grid,
@@ -188,7 +195,36 @@ class PSApp:
         if changed_hide_outsides and self.state.grid is not None:
             self._register_grid()
             
+    def _draw_surface_mesh_controls(self):
+        psim.TextUnformatted("Surface Mesh")
+        psim.Separator()
         
+        changed_show_mesh, self.state.show_mesh = psim.Checkbox(
+            "Show mesh",
+            self.state.show_mesh,
+        )
+        
+        changed_iso_level, self.state.iso_level = psim.SliderFloat(
+            "Iso Level",
+            self.state.iso_level,
+            -1.0,
+            1.0,
+        )
+
+        # toggle mesh visibility or create/remove mesh
+        if changed_show_mesh:
+            if self.state.show_mesh:
+                # create mesh from current grid
+                self._register_mesh()
+            else:
+                if self.mesh_handle is not None:
+                    ps.remove_surface_mesh("implicit_mesh", error_if_absent=False)
+                    self.mesh_handle = None
+
+        # if iso level changed, regenerate mesh when visible
+        if changed_iso_level and self.state.show_mesh:
+            self._register_mesh()
+
     def load_selected_file(self):
         path = self.state.files[self.state.selected_idx]
         point_cloud = load_point_cloud(path)
@@ -243,10 +279,13 @@ class PSApp:
                 self.state.grid.points,
                 self.state.constraints,
                 self.state.radius,
-                basis=["constant", "linear", "quadratic"][self.state.grid_basis_idx],
+                basis=["constant", "linear"][self.state.grid_basis_idx],
             )
 
         self._register_grid()
+        # update mesh if visible
+        if self.state.show_mesh:
+            self._register_mesh()
 
     def flip_normals(self):
         if self.state.point_cloud is None:
@@ -441,4 +480,74 @@ class PSApp:
                 filtered_colors,
                 enabled=True,
             )
+
+    def _register_mesh(self):
+        """Generate a triangle mesh from the implicit grid using Marching Cubes and register it in Polyscope."""
+        if self.state.grid is None or self.state.grid.values is None:
+            return
+
+        # remove existing mesh if present
+        if self.mesh_handle is not None:
+            ps.remove_surface_mesh("implicit_mesh", error_if_absent=False)
+            self.mesh_handle = None
+
+        nx, ny, nz = self.state.grid.cell_matrix
+        points = self.state.grid.points
+        values = self.state.grid.values
+
+        # helper to convert (i,j,k) to flat index in points (meshgrid indexing='ij')
+        def idx(i, j, k):
+            return i * (ny + 1) * (nz + 1) + j * (nz + 1) + k
+
+        verts = []
+        faces = []
+
+        # iterate over all cells
+        for i in range(nx):
+            for j in range(ny):
+                for k in range(nz):
+                    cell = GridCell()
+                    # Bourke vertex ordering
+                    cell_idx = [
+                        (i, j, k),
+                        (i + 1, j, k),
+                        (i + 1, j + 1, k),
+                        (i, j + 1, k),
+                        (i, j, k + 1),
+                        (i + 1, j, k + 1),
+                        (i + 1, j + 1, k + 1),
+                        (i, j + 1, k + 1),
+                    ]
+
+                    for vi, (ii, jj, kk) in enumerate(cell_idx):
+                        fi = idx(ii, jj, kk)
+                        cell.p[vi] = points[fi]
+                        cell.val[vi] = float(values[fi])
+
+                    try:
+                        tris = polygonise(cell, self.state.iso_level)
+                    except Exception:
+                        tris = []
+
+                    for tri in tris:
+                        if tri is None or tri.p[0] is None:
+                            continue
+                        base = len(verts)
+                        verts.append(np.array(tri.p[0], dtype=float))
+                        verts.append(np.array(tri.p[1], dtype=float))
+                        verts.append(np.array(tri.p[2], dtype=float))
+                        faces.append([base, base + 1, base + 2])
+
+        if len(verts) == 0:
+            return
+
+        verts = np.vstack(verts)
+        faces = np.array(faces, dtype=int)
+
+        self.mesh_handle = ps.register_surface_mesh(
+            "implicit_mesh",
+            verts,
+            faces,
+            enabled=self.state.show_mesh,
+        )
     
